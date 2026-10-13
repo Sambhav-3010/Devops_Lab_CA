@@ -17,6 +17,14 @@ pipeline {
         // Docker Desktop created this kubeconfig for the Windows user running the project.
         // Change this path if Jenkins is installed under a different Windows username.
         KUBECONFIG = 'C:\\Users\\sambh\\.kube\\config'
+        LLM_PROVIDER = 'gemini'
+        GEMINI_API_KEY = credentials('gemini-api-key')
+        GEMINI_MODEL = 'gemini-2.5-flash'
+        GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+        LLM_MAX_TOKENS = '8192'
+        LLM_TEMPERATURE = '0.2'
+        LLM_TOP_P = '0.9'
+        RAG_ENABLE_LLM = '1'
     }
 
     stages {
@@ -24,30 +32,69 @@ pipeline {
             steps { checkout scm }
         }
 
+        stage('Policy Gate') {
+            steps {
+                powershell '''
+                    $envFiles = Get-ChildItem -Path . -Recurse -Force -File -Filter '.env' -ErrorAction SilentlyContinue
+                    if ($envFiles) {
+                        $message = "Policy gate blocked the build: .env files are not allowed in the repository. Store configuration in Jenkins Credentials or Kubernetes Secrets. Found: $($envFiles.FullName -join ', ')"
+                        .\\scripts\\explain-failure.ps1 -Stage 'Policy Gate' -FailureText $message
+                        throw $message
+                    }
+                '''
+            }
+        }
+
         stage('Install and Test') {
             steps {
                 dir('app') {
-                    powershell 'npm install --no-audit --no-fund'
-                    powershell 'npm test'
+                    powershell '''
+                        try {
+                            npm install --no-audit --no-fund
+                            npm test
+                            if ($LASTEXITCODE -ne 0) { throw 'Automated tests returned a non-zero exit code.' }
+                        } catch {
+                            $message = $_ | Out-String
+                            ..\\scripts\\explain-failure.ps1 -Stage 'Install and Test' -FailureText $message
+                            throw
+                        }
+                    '''
                 }
             }
         }
 
         stage('Build Docker Image') {
-            steps { powershell 'docker build --tag $env:IMAGE .\\app' }
+            steps {
+                powershell '''
+                    try {
+                        docker build --tag $env:IMAGE .\\app
+                        if ($LASTEXITCODE -ne 0) { throw 'Docker image build returned a non-zero exit code.' }
+                    } catch {
+                        $message = $_ | Out-String
+                        .\\scripts\\explain-failure.ps1 -Stage 'Build Docker Image' -FailureText $message
+                        throw
+                    }
+                '''
+            }
         }
 
         stage('Deploy Application') {
             steps {
                 powershell '''
-                    kubectl config get-contexts
-                    kubectl config use-context $env:KUBE_CONTEXT
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Kubernetes context '$env:KUBE_CONTEXT' is not available to the Jenkins service account. Configure Jenkins to run as the Windows user that owns Docker Desktop, or set KUBECONFIG for the Jenkins job."
+                    try {
+                        kubectl config get-contexts
+                        kubectl config use-context $env:KUBE_CONTEXT
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Kubernetes context '$env:KUBE_CONTEXT' is not available to the Jenkins service account."
+                        }
+                        kubectl apply -f .\\k8s\\app.yaml
+                        kubectl -n $env:APP_NAMESPACE set image deployment/$env:APP_NAME $env:APP_NAME=$env:IMAGE
+                        kubectl -n $env:APP_NAMESPACE rollout status deployment/$env:APP_NAME --timeout=180s
+                    } catch {
+                        $message = $_ | Out-String
+                        .\\scripts\\explain-failure.ps1 -Stage 'Deploy Application' -FailureText $message
+                        throw
                     }
-                    kubectl apply -f .\\k8s\\app.yaml
-                    kubectl -n $env:APP_NAMESPACE set image deployment/$env:APP_NAME $env:APP_NAME=$env:IMAGE
-                    kubectl -n $env:APP_NAMESPACE rollout status deployment/$env:APP_NAME --timeout=180s
                 '''
             }
         }
@@ -55,9 +102,15 @@ pipeline {
         stage('Apply Monitoring') {
             steps {
                 powershell '''
-                    kubectl apply -f .\\k8s\\servicemonitor.yaml
-                    kubectl apply -f .\\k8s\\alerts.yaml
-                    kubectl apply -f .\\k8s\\dashboard.yaml
+                    try {
+                        kubectl apply -f .\\k8s\\servicemonitor.yaml
+                        kubectl apply -f .\\k8s\\alerts.yaml
+                        kubectl apply -f .\\k8s\\dashboard.yaml
+                    } catch {
+                        $message = $_ | Out-String
+                        .\\scripts\\explain-failure.ps1 -Stage 'Apply Monitoring' -FailureText $message
+                        throw
+                    }
                 '''
             }
         }
@@ -65,15 +118,24 @@ pipeline {
         stage('Smoke Test') {
             steps {
                 powershell '''
-                    kubectl -n $env:APP_NAMESPACE get deployment,pods,svc
-                    kubectl -n $env:APP_NAMESPACE wait --for=condition=available deployment/$env:APP_NAME --timeout=60s
+                    try {
+                        kubectl -n $env:APP_NAMESPACE get deployment,pods,svc
+                        kubectl -n $env:APP_NAMESPACE wait --for=condition=available deployment/$env:APP_NAME --timeout=60s
+                    } catch {
+                        $message = $_ | Out-String
+                        .\\scripts\\explain-failure.ps1 -Stage 'Smoke Test' -FailureText $message
+                        throw
+                    }
                 '''
             }
         }
     }
 
     post {
-        always { powershell 'kubectl -n $env:APP_NAMESPACE get pods,svc 2>$null; exit 0' }
+        always {
+            powershell 'kubectl -n $env:APP_NAMESPACE get pods,svc 2>$null; exit 0'
+            archiveArtifacts artifacts: 'artifacts/**', allowEmptyArchive: true
+        }
         success { echo 'Deployment completed. Open Grafana to verify workload metrics.' }
     }
 }
