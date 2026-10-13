@@ -160,6 +160,18 @@ This creates a clear two-run demonstration: AI-assisted failure diagnosis follow
 
 The Jenkinsfile reads the key through `credentials('gemini-api-key')`. It does not store the key in Git. The configured model is `gemini-2.5-flash`, using the official Gemini `models.generateContent` REST API. The model endpoint and generation settings are configurable through Jenkins environment variables.
 
+The call path is explicit:
+
+```text
+Jenkins failure catch block
+  → scripts/explain-failure.ps1
+  → Invoke-RestMethod POST /v1beta/models/gemini-2.5-flash:generateContent
+  → Gemini response
+  → artifacts/gemini-failure-explanation.md
+```
+
+The Jenkins console prints `Calling Gemini API` and `Gemini API response received successfully` when the external call actually occurs. If the key is missing, it prints `Gemini skipped` and writes only a fallback report.
+
 ## Demonstration script
 
 Explain the pipeline in this order:

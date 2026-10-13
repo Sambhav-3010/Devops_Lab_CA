@@ -39,6 +39,7 @@ if ([string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
 
 $baseUrl = if ($env:GEMINI_BASE_URL) { $env:GEMINI_BASE_URL.TrimEnd('/') } else { 'https://generativelanguage.googleapis.com/v1beta' }
 $model = if ($env:GEMINI_MODEL) { $env:GEMINI_MODEL } else { 'gemini-2.5-flash' }
+Write-Host "Calling Gemini API: provider=$env:LLM_PROVIDER model=$model endpoint=$baseUrl/models/$model`:generateContent" -ForegroundColor Cyan
 
 $prompt = @"
 You are a DevOps pipeline failure analyst using Gemini 2.5 Flash. Analyze the Jenkins failure below.
@@ -81,6 +82,7 @@ try {
     }
 
     Set-Content -Path $reportPath -Value "# Gemini Pipeline Analysis`n`n$explanation" -Encoding UTF8
+    Write-Host 'Gemini API response received successfully.' -ForegroundColor Green
     Write-Host "Gemini explanation written to $reportPath" -ForegroundColor Cyan
 }
 catch {
