@@ -121,6 +121,23 @@ artifacts/gemini-failure-explanation.md
 
 The report is archived in Jenkins, while the original failure remains the build result. Gemini explains the failure; it does not override a failed gate or deploy a broken build.
 
+### Email notification on failure
+
+The `failure` post-action uses the Jenkins **Email Extension Plugin** (`emailext`) to send an email containing:
+
+- The Gemini explanation from `artifacts/gemini-failure-explanation.md`.
+- The Jenkins build URL.
+- The console output as a compressed attachment.
+
+Configure this once:
+
+1. Install **Email Extension Plugin** from **Manage Jenkins → Plugins**.
+2. Configure SMTP under **Manage Jenkins → System → Extended E-mail Notification**.
+3. Replace `NOTIFICATION_EMAIL` in the Jenkinsfile with your email, or define a Jenkins job/global environment variable with that name.
+4. Push the Jenkinsfile and run a controlled failure with `SIMULATE_FAILURE=true`.
+
+For Gmail SMTP, use an App Password rather than your normal Gmail password. The SMTP account/password belongs in Jenkins configuration, never in Git.
+
 ### How to demonstrate Gemini during the presentation
 
 1. In Jenkins click **Build with Parameters**.

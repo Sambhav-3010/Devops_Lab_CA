@@ -33,6 +33,8 @@ pipeline {
         LLM_TEMPERATURE = '0.2'
         LLM_TOP_P = '0.9'
         RAG_ENABLE_LLM = '1'
+        // Set this in Jenkins global/job environment variables.
+        NOTIFICATION_EMAIL = 'sambhavmani.tripathi@gmail.com'
     }
 
     stages {
@@ -158,6 +160,23 @@ Expected action: stop the pipeline and explain the failure without exposing secr
         always {
             powershell 'kubectl -n $env:APP_NAMESPACE get pods,svc 2>$null; exit 0'
             archiveArtifacts artifacts: 'artifacts/**', allowEmptyArchive: true
+        }
+        failure {
+            emailext(
+                to: "${env.NOTIFICATION_EMAIL}",
+                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: '''The Jenkins build failed.
+
+Gemini failure analysis:
+
+${FILE,path="artifacts/gemini-failure-explanation.md"}
+
+Jenkins build: ${BUILD_URL}
+Console output: ${BUILD_URL}console
+''',
+                attachLog: true,
+                compressLog: true
+            )
         }
         success { echo 'Deployment completed. Open Grafana to verify workload metrics.' }
     }
