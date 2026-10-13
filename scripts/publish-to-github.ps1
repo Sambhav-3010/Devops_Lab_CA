@@ -24,8 +24,8 @@ if ($pending) {
     git commit -m 'Add Kubernetes workload reliability DevOps project'
 }
 
-$origin = git remote get-url origin 2>$null
-if ($LASTEXITCODE -eq 0 -and $origin) {
+$remotes = @(git remote)
+if ($remotes -contains 'origin') {
     git remote set-url origin $RepositoryUrl
 } else {
     git remote add origin $RepositoryUrl
