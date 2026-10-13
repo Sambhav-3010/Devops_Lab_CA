@@ -37,7 +37,11 @@ pipeline {
         stage('Deploy Application') {
             steps {
                 powershell '''
+                    kubectl config get-contexts
                     kubectl config use-context $env:KUBE_CONTEXT
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Kubernetes context '$env:KUBE_CONTEXT' is not available to the Jenkins service account. Configure Jenkins to run as the Windows user that owns Docker Desktop, or set KUBECONFIG for the Jenkins job."
+                    }
                     kubectl apply -f .\\k8s\\app.yaml
                     kubectl -n $env:APP_NAMESPACE set image deployment/$env:APP_NAME $env:APP_NAME=$env:IMAGE
                     kubectl -n $env:APP_NAMESPACE rollout status deployment/$env:APP_NAME --timeout=180s
@@ -66,7 +70,7 @@ pipeline {
     }
 
     post {
-        always { powershell 'kubectl -n $env:APP_NAMESPACE get pods,svc 2>$null' }
+        always { powershell 'kubectl -n $env:APP_NAMESPACE get pods,svc 2>$null; exit 0' }
         success { echo 'Deployment completed. Open Grafana to verify workload metrics.' }
     }
 }
