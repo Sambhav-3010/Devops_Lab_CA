@@ -1,60 +1,114 @@
 param(
     [int]$DurationMinutes = 7,
-    [int]$RequestIntervalSeconds = 1
+    [int]$RequestIntervalSeconds = 1,
+    [switch]$ScaleToZeroAtEnd
 )
 
 $ErrorActionPreference = 'Continue'
+$baseUrl = 'http://localhost:8000'
+$totalSeconds = [math]::Max(60, $DurationMinutes * 60)
+$outageSeconds = if ($ScaleToZeroAtEnd) { 60 } else { 0 }
+$trafficSeconds = $totalSeconds - $outageSeconds
+$started = Get-Date
 
-function Wait-Seconds($seconds, $message) {
-    Write-Host "$message ($seconds seconds)" -ForegroundColor Cyan
-    Start-Sleep -Seconds $seconds
+function Start-DemoJob([string]$Name, [scriptblock]$Work, [object[]]$Arguments) {
+    $job = Start-Job -Name $Name -ScriptBlock $Work -ArgumentList $Arguments
+    Write-Host "Started background workload: $Name (job $($job.Id))" -ForegroundColor DarkCyan
+    return $job
 }
 
-$trafficJob = Start-Job -ArgumentList $DurationMinutes, $RequestIntervalSeconds -ScriptBlock {
-    param($Minutes, $Interval)
-    $end = (Get-Date).AddMinutes($Minutes)
+Write-Host 'Starting parallel Kubernetes reliability demonstration.' -ForegroundColor Cyan
+Write-Host "Duration: $DurationMinutes minute(s); application: $baseUrl" -ForegroundColor Cyan
+Write-Host 'Keep Grafana on Last 5 minutes with 5-second refresh.' -ForegroundColor Cyan
+
+$normalJob = Start-DemoJob 'normal-2xx' {
+    param($Url, $Seconds, $Interval)
+    $end = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $end) {
-        try { Invoke-RestMethod 'http://localhost:8000/health' | Out-Null } catch { }
+        try { Invoke-RestMethod "$Url/health" -TimeoutSec 20 | Out-Null } catch { }
         Start-Sleep -Seconds $Interval
+    }
+} -Arguments $baseUrl, $trafficSeconds, $RequestIntervalSeconds
+
+$fiveOhThreeJob = Start-DemoJob 'http-503-failures' {
+    param($Url, $Seconds)
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        try { Invoke-RestMethod "$Url/fail" -TimeoutSec 20 | Out-Null } catch { }
+        Start-Sleep -Seconds 3
+    }
+} -Arguments $baseUrl, $trafficSeconds
+
+$fiveHundredJob = Start-DemoJob 'http-500-failures' {
+    param($Url, $Seconds)
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        try { Invoke-RestMethod "$Url/load?mode=error" -TimeoutSec 20 | Out-Null } catch { }
+        Start-Sleep -Seconds 4
+    }
+} -Arguments $baseUrl, $trafficSeconds
+
+$cpuJob = Start-DemoJob 'cpu-pressure' {
+    param($Url, $Seconds)
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        try { Invoke-RestMethod "$Url/load?mode=cpu&seconds=5" -TimeoutSec 20 | Out-Null } catch { }
+        Start-Sleep -Seconds 8
+    }
+} -Arguments $baseUrl, $trafficSeconds
+
+$latencyJob = Start-DemoJob 'p95-p99-latency' {
+    param($Url, $Seconds)
+    $end = (Get-Date).AddSeconds($Seconds)
+    $durations = @(1, 2, 4, 8)
+    $index = 0
+    while ((Get-Date) -lt $end) {
+        $duration = $durations[$index % $durations.Count]
+        try { Invoke-RestMethod "$Url/load?mode=cpu&seconds=$duration" -TimeoutSec 30 | Out-Null } catch { }
+        $index++
+        Start-Sleep -Seconds 3
+    }
+} -Arguments $baseUrl, $trafficSeconds
+
+$memoryJob = Start-DemoJob 'memory-pressure' {
+    param($Url, $Seconds)
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        try { Invoke-RestMethod "$Url/load?mode=memory&mb=15" -TimeoutSec 20 | Out-Null } catch { }
+        Start-Sleep -Seconds 15
+    }
+} -Arguments $baseUrl, $trafficSeconds
+
+try {
+    $deleteAt = [math]::Min(120, [math]::Max(30, [math]::Floor($trafficSeconds / 3)))
+    while (((Get-Date) - $started).TotalSeconds -lt $trafficSeconds) {
+        $elapsed = [math]::Floor(((Get-Date) - $started).TotalSeconds)
+        if ($elapsed -ge $deleteAt -and -not $podDeleted) {
+            Write-Host 'Deleting one application pod to demonstrate Kubernetes self-healing...' -ForegroundColor Yellow
+            $pod = kubectl -n workload-lab get pods -l app=demo-app -o jsonpath='{.items[0].metadata.name}'
+            if ($pod) { kubectl -n workload-lab delete pod $pod }
+            $podDeleted = $true
+        }
+        if ($elapsed % 30 -eq 0) {
+            Write-Host "Parallel demo running: $elapsed / $trafficSeconds seconds" -ForegroundColor Cyan
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    if ($ScaleToZeroAtEnd) {
+        Write-Host 'Final outage phase: scaling demo-app to zero replicas.' -ForegroundColor Red
+        kubectl -n workload-lab scale deployment demo-app --replicas=0
+        Write-Host "Observing DOWN state and failed requests for $outageSeconds seconds..." -ForegroundColor Red
+        Start-Sleep -Seconds $outageSeconds
+        Write-Host 'Application remains scaled to zero. Restore it manually with:' -ForegroundColor Yellow
+        Write-Host 'kubectl -n workload-lab scale deployment demo-app --replicas=2' -ForegroundColor White
+    }
+}
+finally {
+    @($normalJob, $fiveOhThreeJob, $fiveHundredJob, $cpuJob, $latencyJob, $memoryJob) | ForEach-Object {
+        Stop-Job $_ -ErrorAction SilentlyContinue
+        Remove-Job $_ -Force -ErrorAction SilentlyContinue
     }
 }
 
-Write-Host 'Phase 1: continuous successful traffic is running.' -ForegroundColor Green
-Wait-Seconds 30 'Collecting baseline 2xx traffic'
-
-Write-Host 'Phase 2: CPU pressure and long requests.' -ForegroundColor Yellow
-1..4 | ForEach-Object {
-    try { Invoke-RestMethod 'http://localhost:8000/load?mode=cpu&seconds=10' | Out-Null } catch { }
-}
-Wait-Seconds 30 'Allowing p95 and p99 latency to appear'
-
-Write-Host 'Phase 3: retained memory growth.' -ForegroundColor Yellow
-1..6 | ForEach-Object {
-    try { Invoke-RestMethod 'http://localhost:8000/load?mode=memory&mb=15' | Out-Null } catch { }
-}
-Wait-Seconds 30 'Allowing memory metrics to appear'
-
-Write-Host 'Phase 4: deterministic HTTP 503 failures.' -ForegroundColor Red
-$errorEnd = (Get-Date).AddSeconds(90)
-while ((Get-Date) -lt $errorEnd) {
-    try { Invoke-RestMethod 'http://localhost:8000/fail' | Out-Null } catch { }
-    Start-Sleep -Seconds 2
-}
-
-Write-Host 'Phase 5: deleting one pod; Kubernetes should replace it.' -ForegroundColor Yellow
-$pod = kubectl -n workload-lab get pods -l app=demo-app -o jsonpath='{.items[0].metadata.name}'
-if ($pod) { kubectl -n workload-lab delete pod $pod }
-Wait-Seconds 30 'Watching self-healing and replica recovery'
-
-Write-Host 'Phase 6: scaling all replicas to zero.' -ForegroundColor Red
-kubectl -n workload-lab scale deployment demo-app --replicas=0
-Wait-Seconds 75 'Observe unavailable replicas and scrape/outage signals'
-
-Write-Host 'Phase 7: restoring two replicas.' -ForegroundColor Green
-kubectl -n workload-lab scale deployment demo-app --replicas=2
-kubectl -n workload-lab rollout status deployment/demo-app --timeout=120s
-Wait-Seconds 30 'Watching recovery and new successful traffic'
-
-Stop-Job $trafficJob -ErrorAction SilentlyContinue
-Remove-Job $trafficJob -Force -ErrorAction SilentlyContinue
-Write-Host 'Reliability demo complete. Review Grafana panels and Prometheus alerts.' -ForegroundColor Green
+Write-Host 'Parallel reliability demonstration complete. Review Grafana and Prometheus now.' -ForegroundColor Green
