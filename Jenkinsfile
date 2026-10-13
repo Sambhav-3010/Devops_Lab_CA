@@ -162,10 +162,12 @@ Expected action: stop the pipeline and explain the failure without exposing secr
             archiveArtifacts artifacts: 'artifacts/**', allowEmptyArchive: true
         }
         failure {
-            emailext(
-                to: "${env.NOTIFICATION_EMAIL}",
-                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: '''The Jenkins build failed.
+            script {
+                try {
+                    emailext(
+                        to: "${env.NOTIFICATION_EMAIL}",
+                        subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: '''The Jenkins build failed.
 
 Gemini failure analysis:
 
@@ -174,9 +176,13 @@ ${FILE,path="artifacts/gemini-failure-explanation.md"}
 Jenkins build: ${BUILD_URL}
 Console output: ${BUILD_URL}console
 ''',
-                attachLog: true,
-                compressLog: true
-            )
+                        attachLog: true,
+                        compressLog: true
+                    )
+                } catch (mailError) {
+                    echo "Email notification failed, but the original build failure is preserved: ${mailError}"
+                }
+            }
         }
         success { echo 'Deployment completed. Open Grafana to verify workload metrics.' }
     }
