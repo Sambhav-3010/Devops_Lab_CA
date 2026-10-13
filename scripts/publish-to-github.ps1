@@ -10,6 +10,11 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw 'Git is not installed or is not on PATH.'
 }
 
+# The project may have been created by another Windows identity (for example,
+# a sandbox/editor process). Trust only this exact repository path.
+$repositoryPath = (Get-Location).Path.Replace('/', '/')
+git config --global --add safe.directory $repositoryPath
+
 git init
 git branch -M $Branch
 git add .
