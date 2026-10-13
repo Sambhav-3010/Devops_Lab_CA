@@ -9,6 +9,14 @@ pipeline {
 
     triggers { githubPush() }
 
+    parameters {
+        booleanParam(
+            name: 'SIMULATE_FAILURE',
+            defaultValue: false,
+            description: 'Demo only: intentionally fail the policy stage and generate a Gemini explanation.'
+        )
+    }
+
     environment {
         APP_NAME = 'demo-app'
         APP_NAMESPACE = 'workload-lab'
@@ -41,6 +49,21 @@ pipeline {
                         .\\scripts\\explain-failure.ps1 -Stage 'Policy Gate' -FailureText $message
                         throw $message
                     }
+                '''
+            }
+        }
+
+        stage('Gemini Failure Demonstration') {
+            when { expression { return params.SIMULATE_FAILURE } }
+            steps {
+                powershell '''
+                    $message = @"
+Demo failure injected by Jenkins parameter SIMULATE_FAILURE=true.
+This represents a protected configuration or policy violation before deployment.
+Expected action: stop the pipeline and explain the failure without exposing secrets.
+"@
+                    .\\scripts\\explain-failure.ps1 -Stage 'Gemini Failure Demonstration' -FailureText $message
+                    throw $message
                 '''
             }
         }

@@ -32,6 +32,7 @@ Prometheus + Grafana monitoring
 | Deployment | Docker Desktop Kubernetes Deployment and Service |
 | Documentation | README, RUNBOOK, architecture, and presentation content |
 | Monitoring | Prometheus, Grafana, ServiceMonitor, PrometheusRule |
+| AI-assisted failure explanation | Gemini 2.5 Flash reads sanitized pipeline errors and writes an archived explanation report |
 
 ## Git setup and GitHub push
 
@@ -107,6 +108,40 @@ Pipeline stages:
 7. Keep Docker Desktop Kubernetes running and confirm `kubectl config get-contexts` contains `docker-desktop`.
 
 The pipeline deploys to the local Docker Desktop cluster. A remote Jenkins agent cannot reach that private local cluster unless it is hosted on the same machine/network.
+
+## Gemini failure explanation
+
+The Jenkinsfile includes a policy gate and failure-analysis hooks. If a `.env` file is committed, the policy gate stops the pipeline before testing or deployment. If testing, Docker build, Kubernetes rollout, monitoring application, or the smoke test fails, the pipeline calls `scripts/explain-failure.ps1`.
+
+The script sends only sanitized stage/error text to Gemini and creates:
+
+```text
+artifacts/gemini-failure-explanation.md
+```
+
+The report is archived in Jenkins, while the original failure remains the build result. Gemini explains the failure; it does not override a failed gate or deploy a broken build.
+
+### How to demonstrate Gemini during the presentation
+
+1. In Jenkins click **Build with Parameters**.
+2. Set `SIMULATE_FAILURE` to `true` and run the build.
+3. Show that the **Gemini Failure Demonstration** stage fails intentionally.
+4. Open the build page and show the archived `artifacts/gemini-failure-explanation.md` report.
+5. Explain that the pipeline stopped before application deployment.
+6. Run **Build with Parameters** again with `SIMULATE_FAILURE=false`.
+7. Show the green Jenkins pipeline, Kubernetes rollout, and finally Grafana metrics.
+
+This creates a clear two-run demonstration: AI-assisted failure diagnosis followed by a successful delivery and runtime observability.
+
+### Configure the Gemini secret in Jenkins
+
+1. Open **Manage Jenkins → Credentials → System → Global credentials → Add Credentials**.
+2. Kind: **Secret text**.
+3. ID: `gemini-api-key`.
+4. Secret: paste a newly generated Gemini API key.
+5. Save the credential.
+
+The Jenkinsfile reads the key through `credentials('gemini-api-key')`. It does not store the key in Git. The configured model is `gemini-2.5-flash`, using the official Gemini `models.generateContent` REST API. The model endpoint and generation settings are configurable through Jenkins environment variables.
 
 ## Demonstration script
 
