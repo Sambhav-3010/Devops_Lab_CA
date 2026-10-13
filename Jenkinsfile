@@ -14,6 +14,9 @@ pipeline {
         APP_NAMESPACE = 'workload-lab'
         IMAGE = "workload-demo:${env.BUILD_NUMBER}"
         KUBE_CONTEXT = 'docker-desktop'
+        // Docker Desktop created this kubeconfig for the Windows user running the project.
+        // Change this path if Jenkins is installed under a different Windows username.
+        KUBECONFIG = 'C:\\Users\\sambh\\.kube\\config'
     }
 
     stages {
