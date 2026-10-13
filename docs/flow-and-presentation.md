@@ -56,6 +56,16 @@ Organize the Grafana dashboard in this order:
 - Availability over time.
 - p95 latency over time.
 
+### Deterministic p95/p99 demonstration
+
+Keep the application port-forward running and execute:
+
+```powershell
+.\scripts\latency-demo.ps1
+```
+
+The script first sends normal `/health` requests, then sends CPU-bound requests lasting 1, 2, 4, and 8 seconds. The application records each request duration in a Prometheus histogram, so the p95 and p99 quantiles rise visibly. Keep Grafana on **Last 5 minutes**, wait 15–30 seconds for refresh, and explain that p95 represents the slowest 5% boundary while p99 represents the slowest 1% boundary.
+
 ## 3. SLA versus SLO versus SLI
 
 - **SLI:** the measurement, such as request success ratio or p95 latency.
