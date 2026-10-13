@@ -1,0 +1,96 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: workload-reliability-alerts
+  namespace: workload-lab
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: workload-reliability
+      rules:
+        - alert: WorkloadHighCPU
+          expr: |
+            (
+              sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="workload-lab",container="demo-app",image!=""}[2m]))
+              /
+              sum by (pod) (kube_pod_container_resource_limits{namespace="workload-lab",container="demo-app",resource="cpu",unit="core"})
+            ) > 0.8
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application pod CPU usage is high"
+            description: "A demo-app pod has exceeded 80 percent of its CPU limit for two minutes."
+        - alert: WorkloadHighMemory
+          expr: |
+            (
+              container_memory_working_set_bytes{namespace="workload-lab",container="demo-app",image!=""}
+              /
+              kube_pod_container_resource_limits{namespace="workload-lab",container="demo-app",resource="memory",unit="byte"}
+            ) > 0.8
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application pod memory usage is high"
+            description: "A demo-app pod has exceeded 80 percent of its memory limit for two minutes."
+        - alert: WorkloadReplicasUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="workload-lab",deployment="demo-app"} < 2
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application replicas are unavailable"
+            description: "Fewer than two demo-app replicas are available."
+        - alert: ApplicationHighErrorRate
+          expr: |
+            (
+              sum(rate(demo_http_requests_total{namespace="workload-lab",status=~"5.."}[2m]))
+              /
+              clamp_min(sum(rate(demo_http_requests_total{namespace="workload-lab"}[2m])), 0.001)
+            ) > 0.1
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application HTTP error rate is high"
+            description: "More than 10 percent of observed application requests are returning server errors."
+        - alert: DemoAppMetricsTargetDown
+          expr: max(up{namespace="workload-lab"}) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Demo application metrics target is down"
+            description: "Prometheus cannot scrape any demo-app target. Check the Service, pods, ServiceMonitor, or application endpoint."
+        - alert: DemoAppAvailabilityBelowSLO
+          expr: |
+            (
+              1 - (
+                (sum(rate(demo_http_requests_total{namespace="workload-lab",status=~"5.."}[5m])) or vector(0))
+                /
+                clamp_min(sum(rate(demo_http_requests_total{namespace="workload-lab"}[5m])), 0.001)
+              )
+            ) < 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Demo application availability is below the 85 percent SLO"
+            description: "The rolling five-minute request success ratio is below the demo service objective."
+        - alert: DemoAppHighP95Latency
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(demo_http_request_duration_seconds_bucket{namespace="workload-lab"}[5m])
+              )
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Demo application p95 latency is above 500 milliseconds"
+            description: "The rolling five-minute application request-duration p95 is above the demo latency objective."
+

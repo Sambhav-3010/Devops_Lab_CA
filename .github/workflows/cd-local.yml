@@ -1,0 +1,51 @@
+name: CD - Deploy to Docker Desktop Kubernetes
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'GHCR image tag to deploy, normally a commit SHA'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/kubernetes-workload-demo:${{ inputs.image_tag }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Confirm local Kubernetes context
+        shell: pwsh
+        run: |
+          kubectl config use-context docker-desktop
+          kubectl get nodes
+
+      - name: Apply application resources
+        shell: pwsh
+        run: kubectl apply -f k8s/app.yaml
+
+      - name: Deploy versioned image
+        shell: pwsh
+        run: |
+          kubectl -n workload-lab set image deployment/demo-app demo-app=$env:IMAGE
+          kubectl -n workload-lab rollout status deployment/demo-app --timeout=180s
+
+      - name: Apply monitoring resources
+        shell: pwsh
+        run: |
+          kubectl apply -f k8s/servicemonitor.yaml
+          kubectl apply -f k8s/alerts.yaml
+          kubectl apply -f k8s/dashboard.yaml
+
+      - name: Smoke test workload
+        shell: pwsh
+        run: |
+          kubectl -n workload-lab get pods
+          kubectl -n workload-lab get service demo-app
